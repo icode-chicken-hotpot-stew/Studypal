@@ -1,4 +1,4 @@
-package com.example.mvp_app
+package com.icode.studypal
 
 import android.app.AlarmManager
 import android.app.PendingIntent
@@ -100,7 +100,7 @@ class MainActivity : FlutterActivity() {
         sessionId: String,
     ): PendingIntent {
         val intent = Intent(this, SupervisorNotificationDebugReceiver::class.java).apply {
-            action = "com.example.mvp_app.DEBUG_SUPERVISOR_NOTIFICATION.$stage"
+            action = "com.icode.studypal.DEBUG_SUPERVISOR_NOTIFICATION.$stage"
             putExtra("stage", stage)
             putExtra("sessionId", sessionId)
             putExtra("requestCode", requestCode)
