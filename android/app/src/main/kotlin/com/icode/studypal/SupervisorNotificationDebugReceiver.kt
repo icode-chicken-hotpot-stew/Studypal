@@ -1,4 +1,4 @@
-package com.example.mvp_app
+package com.icode.studypal
 
 import android.content.BroadcastReceiver
 import android.content.Context
