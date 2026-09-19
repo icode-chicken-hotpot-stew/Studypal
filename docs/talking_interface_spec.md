@@ -1,7 +1,9 @@
 # 对话与 Tips 系统 Interface Spec（当前实现基线）
 
-> 版本: v6.0  
-> 最后更新: 2026-04-03  
+> 版本: v0.1.0 实现基线
+>
+> 最后更新: 2026-09-19
+>
 > 适用范围: `AppController` 对话状态、触发规则、UI 消费契约
 
 ---
@@ -22,6 +24,7 @@
 1. `lib/main.dart` 创建 `AppController` 并调用 `initialize()`。
 2. `MainStage` 在 `AppLifecycleState.resumed` 时调用 `synchronizeWithCurrentTime()`。
 3. `UIWidgets` 读取 controller 状态并渲染 `ChatBubble`。
+4. `CharacterView` 的 JS 事件回调由 UI 转发到 Controller，角色主状态与 `isTalking` 反向同步至 WebView。
 
 当前对话 UI 已在 `lib/ui_widgets.dart` 主界面内接入，不依赖独立 `DialogueUI` 页面。
 
@@ -77,7 +80,7 @@
 
 1. 同级触发：忽略。
 2. 更低优先级（数字更大）：排队。
-3. `clicked` / `idle`（优先级大于 `resume`）统一排队，不打断当前对话。
+3. `cold_start` / `clicked` / `idle`（优先级大于 `resume`）统一排队，不打断当前对话。
 4. `completed` / `start_focus` / `resume` 可打断较低优先级对话。
 
 排队队列按类型去重，同一类型不会重复入队。
@@ -189,13 +192,15 @@
 - 打字机速度：80ms/字。
 - 文本未打完时点击：立即补全并开始自动下一句计时。
 - 文本打完后 8 秒自动 `onNext()`。
-- 右下角快进按钮执行 `onSkip()`。
+- 文本全部展示后，点击气泡执行 `onNext()`。
+- 文本尚未全部展示时，快进按钮补到下一个句末标点；全部展示后再点击执行 `onSkip()`。
+- 自动下一句定时器由正常打字结束或点击气泡补全文本时启动；当前快进到文本末尾的分支不会额外启动该定时器。
 
 ---
 
 ## 9. 已知边界
 
-- `character_view.dart` 仍为占位实现，对话触发入口当前以 `UIWidgets` 为准。
+- `character_view.dart` 已实际承载 Live2D 渲染与桥接，点击和出场回调经 `UIWidgets` 转发。
 - 对话锁定文案按“候选句 level”解锁，不是按类型整体解锁。
 - 对话系统不负责定义 Live2D 动作和口型策略。
 
@@ -210,3 +215,5 @@
 - 文案 JSON 结构与路径
 - `ChatBubble` 自动前进时序
 - `synchronizeWithCurrentTime` 触发行为
+
+返回 [文档导航](README.md) · [对话实现说明](talking_interface.md) · [Live2D 模块](../.llm-wiki/modules/live2d.md)

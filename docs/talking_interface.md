@@ -1,7 +1,10 @@
 # 对话与 Tips 系统实现说明（当前代码版）
 
-> 更新日期: 2026-04-03  
-> 适用文件: `lib/main.dart`、`lib/app_controller.dart`、`lib/ui_widgets.dart`、`assets/dialogues/dialogues.json`
+> 更新日期: 2026-09-19
+>
+> 版本: v0.1.0 实现基线
+>
+> 适用文件: `lib/main.dart`、`lib/app_controller.dart`、`lib/ui_widgets.dart`、`lib/character_view.dart`、`assets/dialogues/dialogues.json`
 
 ---
 
@@ -11,12 +14,13 @@
 
 已生效能力：
 
-- 对话触发：`clicked`、`start_focus`、`completed`、`resume`、`idle`
+- 对话触发：`cold_start`、`clicked`、`start_focus`、`completed`、`resume`、`idle`
 - 对话仲裁：支持中断、排队、忽略
 - 文案来源：资产 JSON + 内置 fallback
 - 等级解锁：按候选句 `requiredLevel` 解锁
 - UI 展示：右下角气泡、打字机、跳过、自动下一句
 - 生命周期恢复：App 回前台后同步计时并触发 `resume`/`completed`
+- 角色桥接：点击事件、出场回调，以及学习／休息／对话动作联动
 
 ---
 
@@ -47,6 +51,13 @@
 - 角色点击触发 `clicked`
 - `ChatBubble` 打字机展示、skip、自动下一句
 
+### 2.4 `lib/character_view.dart`
+
+- WebView 承载本地 Hiyori 模型与 PixiJS / Live2D 库。
+- JS 的 `character_tap` 经 UI 回调调用 `triggerDialogue('clicked')`。
+- `entrance_motion_started` 经 UI 回调安排冷启动对话，默认延迟 5 秒。
+- `isTalking` 开始时触发 `Talk` 动作；学习／休息主动作由 `pomodoroState` 决定。
+
 ---
 
 ## 3. 关键接口（实际可调用）
@@ -63,6 +74,8 @@
 - `void nextDialogue()`
 - `void skipDialogue()`
 - `void registerUserInteraction()`
+- `void scheduleColdStartDialogueAfterEntrance({int? delaySeconds})`
+- `void setColdStartDialogueDelaySeconds(int seconds)`
 
 ### 3.3 生命周期方法
 
@@ -80,6 +93,7 @@
 - `completed`（最高）
 - `start_focus`
 - `resume`
+- `cold_start`
 - `clicked`
 - `idle`（最低）
 
@@ -87,13 +101,14 @@
 
 - `resume` 仅在 `studying + running`
 - `start_focus` 仅在 `studying`
+- `cold_start` 仅在 `resting`，每次 Controller 生命周期仅安排一次
 - 其余类型在 `studying` 时拒绝
 
 ### 4.3 正在对话时的仲裁
 
 - 同优先级：忽略
 - 更低优先级：排队
-- `clicked`/`idle` 不打断当前对话（统一排队）
+- `cold_start`/`clicked`/`idle` 不打断当前对话（统一排队）
 - `completed`/`start_focus`/`resume` 可打断低优先级对话
 
 排队列表会去重，同类型只保留一份待处理请求。
@@ -139,7 +154,8 @@
 - 打字机速度：80ms/字
 - 文本未展示完时点击气泡：立刻补全本句
 - 本句展示完后 8 秒自动 `onNext`
-- 点击快进图标执行 `onSkip`
+- 本句展示完后点击气泡执行 `onNext`
+- 文本未展示完时，快进图标补到当前标点；全部展示完后再点击执行 `onSkip`
 
 这部分已有测试覆盖（`test/chat_bubble_test.dart`）。
 
@@ -162,12 +178,6 @@
 
 ---
 
-## 9. 后续扩展建议
+## 9. 维护入口
 
-可在不破坏当前契约的前提下继续扩展：
-
-- 在 `character_view.dart` 完成角色动作联动
-- 增加对话冷却和频控策略
-- 将触发统计埋点化（类型、等级命中、跳过率）
-
-扩展前先同步更新 `docs/talking_interface_spec.md`。
+当前大版本已交付，后续修改对话行为时同步 [对话契约](talking_interface_spec.md)。完整状态见 [维护说明](maintenance.md)，模块关系见 [UI 模块](../.llm-wiki/modules/study-room.md) 和 [Live2D 模块](../.llm-wiki/modules/live2d.md)。

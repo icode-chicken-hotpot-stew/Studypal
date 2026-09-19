@@ -1,0 +1,4 @@
+# Keep bundled third-party libraries out of the project's language breakdown.
+assets/CubismWebFramework-5-r.5-beta.3.1/** linguist-vendored
+assets/live2d/libs/** linguist-vendored
+assets/live2dcubismcore.min.js linguist-vendored

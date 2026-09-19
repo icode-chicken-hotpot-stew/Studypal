@@ -1,280 +1,174 @@
-# Flutter Project
+# 开发指南
 
-## 项目概述
-- 横屏陪伴学习类 Flutter 项目。
-- 默认应用入口是 `lib/main.dart`，会创建 `MainStage` 并注入 `AppController`。
-- 项目已进入正式快速开发阶段，当前开发窗口为 1 周。
-- 当前阶段以“前端 + 基础后端”交付为主，复杂后端能力为次优先级。
-- 当前仓库仍有部分占位实现和未完成功能，不要把现状误判为“当前还在 MVP”或“功能已齐全”。
+本文面向接手或复现 Studypal `v0.1.0` 的开发者。应用功能与维护状态见 [仓库首页](../README.md) 和 [维护状态](maintenance.md)。
 
-## 技术栈
-- Flutter / Dart
-- 状态管理：`ValueNotifier` + `ValueListenableBuilder`
-- Android：Kotlin DSL（`build.gradle.kts`）
-- Lint：`flutter_lints`
-- 辅助工具：`uv`、`pre-commit`
+## 1. 环境准备
 
-## 项目结构
+| 工具 | 基线 |
+| :--- | :--- |
+| Flutter | 推荐 3.38.6 stable |
+| Dart | 3.10.7；`pubspec.yaml` 约束为 `^3.10.7` |
+| Java | JDK 17 |
+| Android 构建 | AGP 8.11.1、Kotlin 2.2.20；Gradle 版本由 wrapper 配置固定 |
+| 运行目标 | Android 真机或模拟器，启用可用的 Android System WebView |
+| 可选工具 | `uv`、`pre-commit`；PowerShell 7 用于诊断脚本 |
+
+安装 Flutter 和 Android SDK 后，在仓库根目录执行：
+
+```bash
+flutter doctor
+flutter pub get
+flutter devices
+flutter run -d <android-device-id>
+```
+
+使用已提交的 `pubspec.lock` 安装依赖。Android SDK 路径由本地 `android/local.properties` 保存，该文件不提交。仓库目前只提供 Android 平台工程，设备列表中的 Windows 或浏览器不能直接代替 Android 主流程验证。
+
+### 精确复现发布基线
+
+现有 lockfile 使用 `https://pub.flutter-io.cn`。如果当前 Pub 源不同，普通 `pub get` 可能重新解析版本。精确复现时，在当前终端使用相同源并强制锁文件：
+
+```powershell
+# PowerShell
+$env:PUB_HOSTED_URL = 'https://pub.flutter-io.cn'
+flutter pub get --enforce-lockfile
+flutter analyze --no-pub
+flutter test --no-pub
+```
+
+在 Bash 中对应为 `export PUB_HOSTED_URL=https://pub.flutter-io.cn`。此设置只需作用于当前终端；不应把安装依赖产生的意外版本变动混入文档提交。
+
+## 2. 先认识入口与状态流
+
 ```text
-MVP/
-├── android/
-├── assets/
-├── docs/
-├── lib/
-│   ├── main.dart            # 默认入口，负责 MainStage 生命周期与启动恢复接线
-│   ├── app_controller.dart  # 状态中枢，维护番茄钟/对话/XP/音频等核心逻辑
-│   ├── ui_widgets.dart      # 当前主界面与大部分交互逻辑
-│   ├── character_view.dart  # 角色动画层占位文件，当前基本未正式接入
-│   └── live2d.dart          # 独立实验性 Live2D 原型，不是默认入口
-└── test/
+main.dart / MainStage
+  ├─ 创建 AppController，等待 initialize()
+  ├─ 向 Controller 转发生命周期
+  └─ UIWidgets
+       ├─ 计时卡片、配置、卷轴、黑板、唱片机
+       ├─ CharacterView → WebView → 本地 Live2D
+       └─ ChatBubble
+
+用户操作 → Controller 方法 → Notifier → UI 重建
+                          ├─ SharedPreferences
+                          ├─ AudioService
+                          └─ SupervisorNotificationService
 ```
 
-此外还要知道：
-- `assets/background.webp` 已在 `pubspec.yaml` 中注册
-- `android/app/src/main/AndroidManifest.xml` 中当前 Activity 被设置为横屏
-- `analysis_options.yaml` 目前只启用了 `flutter_lints`
+### Controller
 
-## 5. 先掌握这个项目的状态流
+`lib/app_controller.dart` 是状态中枢，负责番茄钟、XP、对话及平台服务协调：
 
-当前项目采用轻量的 controller / view 分层。
+- `pomodoroState`：`resting` / `studying`，表达陪伴业务阶段。
+- `phaseStatus`：`ready` / `running` / `paused`，表达运行控制状态。
+- `remainingSeconds`、`currentPhaseDurationSeconds`：供 UI 计算倒计时与进度。
+- `startTimer()`、`pauseTimer()`、`resetTimer()`：计时控制；`toggleTimer()` 是当前 UI 使用的兼容封装。
+- `updateFocusDuration()`、`updateRestDuration()`：接收秒；UI 展示与调整使用分钟。
+- `updateCycleCount()`：`null` 表示单轮后停止，`1–100` 表示总轮数。
+- `initialize()` 与 `synchronizeWithCurrentTime()`：恢复本地快照、按真实时间推进过期阶段。
 
-### Controller 负责什么
+不要在 UI 层直接改写 Notifier，也不要维护另一套真实计时状态。
 
-`lib/app_controller.dart` 负责集中暴露状态，并维护番茄钟、对话、XP、音频与监督提醒等逻辑。当前番茄钟相关核心状态至少包括：
+### UI 与角色
 
-- `remainingSeconds`
-- `pomodoroState`
-- `phaseStatus`
-- `focusDurationSeconds`
-- `restDurationSeconds`
-- `cycleCount`
-- `completedFocusCycles`
-- `isDrawerOpen`
-- `currentDate`
+`lib/ui_widgets.dart` 实际承载复古书房主界面。分层顺序是背景、角色、前景，再叠加面板与气泡。
 
-原则上：
-- View 层只负责监听和展示
-- 状态修改应通过 Controller 方法触发
-- 不要在 UI 层直接把业务状态当成“单一事实来源”去改写
-- 番茄钟运行控制语义优先看 `phaseStatus`
-- 陪伴 / 动画业务阶段语义优先看 `pomodoroState`
+`lib/character_view.dart` 已完整接入主入口：加载本地 HTML、JS、模型与纹理，并通过 JS 通道转发角色点击、出场事件和状态变化。
 
-### UI 目前是什么状态
+配置面板的加减操作即时写入 Controller；运行时禁止编辑。暂停时修改时长影响后续阶段，当前阶段使用自己的时长快照。
 
-`lib/ui_widgets.dart` 是当前最重要的文件，因为大部分界面都在这里。
+### 平台服务
 
-它目前包含：
-- 底部 Dock 操作栏
-- 角色舞台占位
-- 顶部番茄钟进度与时间展示
-- 统计弹窗入口与占位内容
-- 配置面板、音量面板与若干交互入口
+- `lib/services/audio_service.dart`：独立 BGM / SFX 播放通道、循环播放与音效节流。
+- `lib/services/supervisor_notification_service.dart`：通知初始化、权限、3／6 分钟调度与取消。
+- `android/app/src/main/kotlin/com/icode/studypal/`：Android 宿主与监督提醒的原生桥接。
 
-特别注意：
-- 顶部番茄钟进度展示基于 `remainingSeconds` 与 `currentPhaseDurationSeconds` 计算
-- 时间与阶段切换的单一事实源在 `AppController`
-- UI 层主要负责展示和交互转发，不应重复维护计时状态
-- 当前 UI 已接入专注 / 休息 / 循环三个配置入口
-- 当前控制区仍保留 `toggleTimer()` + `isActive` 驱动的单播放/暂停按钮兼容实现，尚未完全收敛为 OpenSpec 目标中的显式“开始 / 暂停 / 重置”三按钮
+更多接口见 [项目接口规范](interface_spec.md) 和 [源码 Wiki](../.llm-wiki/_index.md)。
 
-## 6. 各核心文件应该怎么改
+## 3. 资源与文案
 
-### `lib/main.dart`
+详见 [资源目录说明](../assets/README.md)。常用入口：
 
-这个文件现在主要做三件事：
-1. 创建 `AppController`
-2. 在 `MainStage.initState()` 里触发 `controller.initialize()`
-3. 通过 `FutureBuilder` 确保恢复完成后再渲染正常 UI
+| 内容 | 路径 |
+| :--- | :--- |
+| 舞台分层 | `assets/background_back.png`、`assets/background_front.png` |
+| UI 图片 | `assets/images/` |
+| 当前 Live2D 模型 | `assets/live2d/hiyori_pro/` |
+| WebView 页面与库 | `assets/live2d/hiyori_viewer.html`、`assets/live2d/libs/` |
+| 对话文案 | `assets/dialogues/dialogues.json` |
+| 音乐／音效 | `assets/music/`、`assets/sfx/` |
+| 字体 | `assets/fonts/` |
 
-一般不建议把大量业务逻辑继续堆到这里。
+新增运行时资源时检查 `pubspec.yaml`，并显式注册需要的子目录。修改角色文件名时同步模型 JSON、HTML 与 Flutter 中的引用。
 
-### `lib/app_controller.dart`
+对话文案支持等级和多句候选组，具体格式见 [对话契约](talking_interface_spec.md)。文案草稿位于 [历史设计](archive/README.md)，运行时读取的是资产 JSON。
 
-如果你负责逻辑层，优先在这里扩展：
-- 番茄钟状态机、恢复与持久化
-- 对话触发策略和文案解锁规则
-- 音频、监督提醒与生命周期联动
-- 与 UI 的状态契约稳定性
+### 图片 hook
 
-当前与番茄钟相关的关键公开方法包括：
-- `initialize()`
-- `startTimer()`
-- `pauseTimer()`
-- `resetTimer()`
-- `updateFocusDuration(int seconds)`
-- `updateRestDuration(int seconds)`
-- `updateCycleCount(int? count)`
-- `fetchHistoryData()`（当前仍是统计相关占位接口）
+仓库使用 `.pre-commit-config.yaml` 调用 `uv run scripts/check_images.py`。hook 会把已暂存、路径含 `assets` 的 PNG/JPG 转成 WebP，删除原文件并更新暂存区，随后阻止当次提交。
 
-说明：
-- `toggleTimer()` 当前仍存在，但更适合视为 `startTimer()` / `pauseTimer()` 的兼容封装，不应再作为番茄钟正式目标契约。
-- 如需补番茄钟后端，先看以下权威材料：
-  - `openspec/changes/improve-pomodoro-functionality/proposal.md`
-  - `openspec/changes/improve-pomodoro-functionality/design.md`
-  - `openspec/changes/improve-pomodoro-functionality/specs/pomodoro-persistence-and-remaining-time/spec.md`
-  - `openspec/changes/improve-pomodoro-functionality/specs/pomodoro-state-transitions/spec.md`
-  - `openspec/changes/improve-pomodoro-functionality/specs/pomodoro-duration-and-cycle-settings/spec.md`
-  - `openspec/changes/improve-pomodoro-functionality/tasks.md`
+检查转换后的代码、`pubspec.yaml` 和模型引用，再重新提交。Live2D 纹理、应用图标等可能依赖固定格式，不能按普通 UI 图片直接更换扩展名。
 
-### `lib/ui_widgets.dart`
-
-如果你负责界面层，优先在这里处理：
-- 布局与样式
-- `ValueListenableBuilder` 监听状态后的渲染
-- 按钮点击后调用 controller 方法
-- 配置面板与占位 UI 的逐步替换
-
-注意：
-- 不要把副作用写进 `build()`
-- 计时器、监听器的注册和销毁应放在生命周期里处理
-- 不要直接在 UI 层偷偷改 Controller 内部状态
-- 番茄钟正式进度不要再回退到本地假状态
-- 新的番茄钟按钮态逻辑应优先依赖 `phaseStatus`，不要继续扩大 `isActive` 的正式职责
-
-### `lib/character_view.dart`
-
-这个文件现在还没有实际角色动画实现。
-
-如果后续接入角色动画，建议方式是：
-- 优先由 `controller.pomodoroState` 决定学习 / 休息主状态
-- 需要区分待开始占位态与真实休息态时，再结合 `phaseStatus`
-
-### `lib/live2d.dart`
-
-这是实验性原型，当前需要特别注意：
-- 它不是默认入口
-- 它使用了 `webview_flutter` 和 `webview_flutter_android`
-- 相关依赖和资源目录可能与主流程演进不同步
-
-因此，如果你运行 `flutter analyze` 或尝试切到这个原型，报错不一定和你当前正在改的主界面有关。
-
-## 7. 常用 Flutter 概念：只记本项目真正用到的
-
-### Widget
-
-Flutter 里界面都是 Widget 组成的。
-
-本项目里你最常看到的是：
-- `StatelessWidget`
-- `StatefulWidget`
-- `ValueListenableBuilder`
-- `ListenableBuilder`
-
-### `ValueNotifier` + `ValueListenableBuilder`
-
-这是当前项目正在使用的主要状态管理方式。
-
-更贴近当前仓库的示例模式如下：
-
-```dart
-ValueListenableBuilder<PomodoroPhaseStatus>(
-  valueListenable: controller.phaseStatus,
-  builder: (context, phaseStatus, _) {
-    return Text(
-      phaseStatus == PomodoroPhaseStatus.running ? '运行中' : '未运行',
-    );
-  },
-)
-```
-
-可以这样理解：
-- `ValueNotifier` 保存状态
-- `ValueListenableBuilder` 监听状态变化并刷新 UI
-- 业务语义和运行控制语义不要混成一个字段使用
-
-## 8. 调试与检查
-
-### 静态检查
-
-```bash
-flutter analyze
-```
-
-但请注意：当前仓库里可能存在历史遗留问题，尤其是 `lib/live2d.dart` 的依赖与资源声明不一致。因此 analyze 报错时，要先判断是不是你的改动引起的。
-
-### 测试
-
-```bash
-flutter test
-```
-
-仓库已有 `test/` 目录，并包含 `app_controller_*` 与 `chat_bubble_test.dart` 等测试。
-如果你修改了计时、对话、音频或等级逻辑，建议至少本地执行一次 `flutter test`。
-
-### 构建 APK
-
-```bash
-flutter build apk
-```
-
-## 9. 图片资源与提交流程
-
-项目里对图片资源有一套明确约束。
-
-### 当前已知情况
-- 主背景资源是 `assets/background.webp`
-- 仓库中配置了 pre-commit 图片检查流程
-- 已暂存的 PNG/JPG 可能会在提交时被自动转换为 WebP
-
-### 提交图片时要知道的事
-
-如果你把 PNG/JPG 放进 `assets/` 并提交，pre-commit 可能会：
-1. 自动转成 WebP
-2. 删除原始 PNG/JPG
-3. 重新加入暂存区
-4. 故意让本次 commit 失败一次
-
-这时不要慌，通常再执行一次 `git commit` 即可。
-
-### 手动处理图片
+手动检查普通图片：
 
 ```bash
 uv run scripts/compress_images.py --to-webp --dry-run
-uv run scripts/compress_images.py --to-webp --delete
-uv run scripts/compress_images.py
 ```
 
-### 新增资源别忘了注册
-
-新增 Flutter 资源后，记得检查 `pubspec.yaml` 是否已经注册；否则运行时可能找不到资源。
-
-## 10. Git 协作建议
-
-一个更贴近当前仓库的基本流程如下：
+## 4. 自动检查与真机验证
 
 ```bash
-git pull origin main
-git checkout -b feat/your-change
-flutter pub get
-# 开发并自测
-git add <相关文件>
-git commit -m "feat: 简述改动"
-git push origin feat/your-change
+flutter analyze
+flutter test
 ```
 
-注意：
-- 尽量只暂存你本次真正修改的文件
-- 不要沿用旧文档里的固定本地路径
-- 如果 pre-commit 改写了图片资源，检查结果后再重新提交
+| 测试文件 | 覆盖范围 |
+| :--- | :--- |
+| `test/app_controller_xp_test.dart` | XP 结算、日上限、跨日、等级解锁与对话仲裁 |
+| `test/app_controller_audio_test.dart` | 自动播放、偏好、前后台恢复、音效防重复及失败处理 |
+| `test/app_controller_supervisor_test.dart` | 首次权限请求、监督会话开启／取消及拒绝处理 |
+| `test/chat_bubble_test.dart` | 打字机与自动下一句时序 |
+| `test/test_doubles.dart` | 音频、通知 fake 服务 |
 
-## 11. 推荐优先看的文档
+涉及平台能力时，在 Android 设备额外验证：
 
-开始开发前，建议优先阅读：
-- `CLAUDE.md`：仓库级开发说明，和当前代码状态最一致
-- `openspec/changes/improve-pomodoro-functionality/design.md`：番茄钟权威设计边界
-- `openspec/changes/improve-pomodoro-functionality/specs/`：番茄钟冻结行为契约
-- `docs/talking_interface.md`：对话系统当前实现口径
+1. 冷启动，确认书房、角色出场、对话和背景音乐正常。
+2. 开始、暂停、继续、重置计时，调整专注／休息／循环。
+3. 完成专注，检查休息切换、XP 与卷轴反馈。
+4. 切后台、回前台、重启，检查时间恢复和音乐偏好。
+5. 分别检查允许／拒绝通知权限后的行为。
+6. 点击角色、气泡、快进和各面板，检查联动及音效。
 
-如果某份旧文档和代码冲突，请以当前代码实现为准。
+自动测试中的 fake 服务不能证明真实 WebView、通知送达或音频资源加载。既有设计的未完成验证项见 [维护状态](maintenance.md)。
 
-## 12. 新同学最容易踩的坑
+## 5. 构建与版本
 
-1. 以为对话系统还没接入：当前对话触发、仲裁、文案加载已经在 `AppController` 生效。
-2. 以为顶部进度条还是演示动画：当前进度已和 controller 状态联动。
-3. 以为 `character_view.dart` 已经能接角色动画：其实还没有正式实现。
-4. 以为 `live2d.dart` 是主入口：其实默认入口仍然是 `lib/main.dart`。
-5. 以为番茄钟已经完全可归档：其实验证任务和显式三按钮控制语义还未完全闭环。
+```bash
+flutter build apk --release
+```
 
-## 13. 一句话总结
+- 产物：`build/app/outputs/flutter-apk/app-release.apk`。
+- 版本：`pubspec.yaml` 中的 `0.1.0+1`。
+- Android 应用 ID：`com.icode.studypal`；显示名：`Studypal`。
+- Dart 包名保留为 `mvp_app`，现有 `package:mvp_app/...` 导入据此工作。
+- 当前 `release` 构建使用 `signingConfigs.getByName("debug")`，供当前版本内测分发；若另行正式发行，需配置和保管稳定的发行密钥。不同机器的 debug 签名可能不同。
+- 已发布安装包和版本说明位于 [v0.1.0 Release](https://github.com/icode-chicken-hotpot-stew/Studypal/releases/tag/v0.1.0)。
 
-如果你只想快速开始：先运行 `flutter pub get && flutter run`，然后优先阅读 `lib/main.dart`、`lib/app_controller.dart`、`lib/ui_widgets.dart`，再结合 `openspec/changes/improve-pomodoro-functionality/` 判断番茄钟当前实现与目标契约。
+## 6. 遇到运行问题
+
+优先看 [Flutter Run 应急卡片](flutter-run-30s-emergency-card.md)。在 Windows 上可生成诊断：
+
+```powershell
+pwsh ./scripts/diagnose_flutter_run.ps1
+```
+
+结果位于 `build/diagnostics/`。先定位第一条上游错误，再判断是 SDK、Gradle 下载、插件版本还是运行时资源问题。
+
+## 7. 维护协作
+
+从最新 `origin/main` 建立维护分支，小范围提交并通过 PR 合入。保留 lockfile，提交前核对 diff 与相关测试结果；行为变更同步接口文档和版本说明。
+
+- 当前维护入口：[维护状态](maintenance.md)。
+- 仓库约定：[CLAUDE.md](../CLAUDE.md)。
+- 设计与任务留存：[OpenSpec 导航](../openspec/README.md)。
+- 完整文档目录：[文档导航](README.md)。
