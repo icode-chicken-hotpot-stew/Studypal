@@ -1,3 +1,6 @@
+# 对话文案草稿
+
+> 历史创作素材。运行时文案以 `assets/dialogues/dialogues.json` 为准，格式与交互见 [对话契约](../talking_interface_spec.md)。
 
 ## start_focus
 

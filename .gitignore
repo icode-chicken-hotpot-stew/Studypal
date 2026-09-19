@@ -48,3 +48,7 @@ app.*.map.json
 
 # Local machine configuration - do not commit
 android/local.properties
+
+# Local competition materials (not part of the game release)
+/docs/Studypal展示视频.mp4
+/docs/Studypal软件需求文档.docx

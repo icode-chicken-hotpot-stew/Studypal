@@ -1,11 +1,11 @@
 # 陪伴学习软件 - 项目接口规范手册
 
-> **版本**: v5.2
-> **最后更新**: 2026.04.04
+> **版本**: v0.1.0 实现基线
+> **最后更新**: 2026-09-19
 > **适用对象**: 开发团队成员、AI 助手 (Claude)
 > **协作原则**: 接口契约优先，模块内部实现自治
 >
-> **状态说明**: 本文档保留为跨模块协作说明，但番茄钟当前权威契约请优先参考 `openspec/changes/improve-pomodoro-functionality/` 下的 proposal / design / specs / tasks 与当前代码实现。
+> **状态说明**: 本文描述已发布版本的接口。当前行为以源码为准；OpenSpec 记录设计目标与验收进度，差异见 [维护状态](maintenance.md)。
 
 ---
 
@@ -17,7 +17,7 @@
 - 番茄钟核心状态、恢复与配置逻辑以 `lib/app_controller.dart` 为准。
 - 主界面交互与番茄钟消费逻辑以 `lib/ui_widgets.dart` 为准。
 - 主入口初始化与生命周期恢复以 `lib/main.dart` 为准。
-- 角色动画层 `lib/character_view.dart` 仍是轻量占位实现。
+- 角色动画层 `lib/character_view.dart` 已通过 WebView 接入本地 Live2D 模型、动作与交互桥接。
 
 ---
 
@@ -25,7 +25,7 @@
 
 ### 2.1 番茄钟
 
-以下文件共同构成当前番茄钟权威来源：
+以下文件用于核对番茄钟的设计与实现；发生冲突时，以源码确认当前行为：
 - `openspec/changes/improve-pomodoro-functionality/proposal.md`
 - `openspec/changes/improve-pomodoro-functionality/design.md`
 - `openspec/changes/improve-pomodoro-functionality/specs/`
@@ -64,9 +64,10 @@
 - 顶部进度、倒计时、配置输入与控制按钮都应尽量只消费 controller contract
 
 ### 3.4 `lib/character_view.dart`
-- 当前仍是轻量占位实现
-- 正式角色动作建议优先读取 `pomodoroState`
-- 若未来要区分“待开始占位态”与“真实休息态”，需再结合 `phaseStatus`
+- 接收 `pomodoroState` 和 `isTalking`，加载 `assets/live2d/hiyori_viewer.html` 与默认 `hiyori_pro` 模型。
+- 将 `studying` 映射为 `study`，`resting` 映射为 `normal`；对话开始时请求 `Talk` 动作。
+- `onCharacterTap` 回调触发点击对话，`onEntranceMotionStarted` 回调安排冷启动对话。
+- 通过 AssetLoader / BinaryAssetLoader 加载文本与二进制资源，Live2DController 接收 JS 事件。
 
 ---
 
@@ -116,7 +117,7 @@
 | `initialize()` | 启动时恢复配置与番茄钟运行快照 |
 | `startTimer()` | 从 ready 启动专注，或从 paused 恢复当前阶段 |
 | `pauseTimer()` | 暂停当前运行阶段 |
-| `resetTimer()` | 回到默认 ready 状态 |
+| `resetTimer()` | 保留用户配置，回到 ready 状态并清零本次已完成轮数 |
 | `updateFocusDuration(int seconds)` | 更新专注时长配置 |
 | `updateRestDuration(int seconds)` | 更新休息时长配置 |
 | `updateCycleCount(int? count)` | 更新循环次数配置 |
@@ -124,7 +125,7 @@
 | `synchronizeWithCurrentTime()` | 生命周期恢复后同步时间与阶段 |
 | `handleLifecycleStateChanged(...)` | 处理应用生命周期变化 |
 | `handleAppBackgrounded()` | 标记后台态并停止前台相关行为 |
-| `fetchHistoryData()` | 统计面板占位接口，非本次番茄钟核心 contract |
+| `fetchHistoryData()` | 统计入口兼容方法；黑板实际消费 XP 折算值，尚无历史明细查询 |
 
 ### 5.2 兼容性方法
 
@@ -142,6 +143,8 @@
 - 顶部进度应由 `remainingSeconds` 与 `currentPhaseDurationSeconds` 推导。
 - 配置输入应统一走 `updateFocusDuration` / `updateRestDuration` / `updateCycleCount`。
 - 按钮态与恢复语义应优先读取 `phaseStatus`，不要再把 `isActive` 作为新 contract 的唯一依据。
+- 当前 UI 是播放／暂停切换按钮加独立重置按钮；配置加减即时生效，「取消」不回滚配置。
+- 专注范围 5–300 分钟，休息范围 1–300 分钟；循环 UI 的 `0` 转为 `null`，有限总轮数为 1–100。
 
 ---
 
@@ -191,6 +194,7 @@ FutureBuilder<void>(
   - `studying` → 学习动作
   - `resting` → 休息/待机动作
 - 若未来需要区分 `resting + ready` 与 `resting + running`，必须再结合 `phaseStatus`。
+- 对话变化由 `ChangeNotifier` 通知 UI；角色通过 `isTalking` 触发 Talk 动作。桥接细节见 [Live2D 模块](../.llm-wiki/modules/live2d.md)。
 
 ---
 
@@ -205,9 +209,26 @@ FutureBuilder<void>(
 
 ---
 
-## 10. 快速参考
+## 10. 成长、音频与通知接口
 
-### 10.1 读取状态
+| 分组 | 状态／方法 | 说明 |
+| :--- | :--- | :--- |
+| 成长 | `totalXp`、`dailyXp`、`level`、`justLeveledUp` | XP 与等级 Notifier |
+| 成长 | `grantFocusXp({required int effectiveFocusSeconds, DateTime? occurredAt})` | 返回 `Future<int>`；按完成时间入账，每分钟 10 XP，低于 5 分钟不发放，每日上限 2,000 |
+| 成长 | `xpToNextLevel`、`minutesToNextLevel` | 卷轴展示所需的只读派生值 |
+| 对话 | `canUnlockDialogue(int requiredLevel)` | 按候选组的等级门槛判断解锁 |
+| 音乐 | `isMusicPlaying`、`musicAutoPlayEnabled`、`currentTrackIndex`、`musicVolume` | 播放偏好与状态 |
+| 音乐 | `playOrPauseMusic()`、`playNextTrack()`、`playPreviousTrack()` | 返回 `Future<void>`，通过 AudioService 控制播放 |
+| 音乐 | `setMusicVolume(double volume)`、`toggleMuteMusic()` | 音量限制在 0.0–1.0 |
+| 音效 | `triggerUiOpenSfx()`、`triggerUiBackSfx()` | 面板交互语义事件，带防重复处理 |
+| 通知 | `requestNotificationPermissionOnFirstLaunch()` | 初始化后请求权限，保存已提示标记 |
+| 通知 | `handleLifecycleStateChanged(...)` | 专注运行时切后台创建监督会话；回前台取消，音乐随生命周期暂停／恢复 |
+
+平台实现位于 `lib/services/`，测试通过构造参数注入 fake 服务。
+
+## 11. 快速参考
+
+### 11.1 读取状态
 
 ```dart
 controller.remainingSeconds.value;
@@ -219,7 +240,7 @@ controller.cycleCount.value;
 controller.completedFocusCycles.value;
 ```
 
-### 10.2 调用接口
+### 11.2 调用接口
 
 ```dart
 await controller.initialize();
@@ -234,3 +255,5 @@ controller.updateCycleCount(4);
 ---
 
 > 如需确认当前仓库真实状态，请直接回到 `lib/app_controller.dart`、`lib/ui_widgets.dart`、`lib/main.dart` 与 OpenSpec 变更目录核对。
+
+返回 [文档导航](README.md) · [Controller 模块](../.llm-wiki/modules/controller.md)
